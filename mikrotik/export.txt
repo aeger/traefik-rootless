@@ -1,0 +1,152 @@
+# 2026-01-12 22:38:07 by RouterOS 7.20.6
+# software id = AIDT-HVMW
+#
+# model = RB5009UPr+S+
+# serial number = HK40AY7X8TT
+/container mounts
+add dst=/opt/adguardhome/conf name=ag-conf src=usb1/docker/adguard/conf
+add dst=/opt/adguardhome/work name=ag-work src=usb1/docker/adguard/work
+/interface bridge
+add name=bridge-lan vlan-filtering=yes
+/interface ethernet
+set [ find default-name=ether1 ] mac-address=00:11:22:33:44:55
+/interface veth
+add address=192.168.99.2/24 dhcp=no gateway=192.168.99.1 gateway6="" mac-address=02:FE:4E:38:22:F2 \
+    name=veth-ag
+/interface list
+add name=LAN
+add name=WAN
+/ip pool
+add name=lan-pool ranges=192.168.1.100-192.168.1.254
+/ip dhcp-server
+add address-pool=lan-pool interface=bridge-lan name=server1
+/certificate settings
+set builtin-trust-anchors=not-trusted
+/container
+add file=usb1/adguardhome.tar interface=veth-ag logging=yes mounts=ag-conf,ag-work name=adguard \
+    root-dir=adguard start-on-boot=yes workdir=/opt/adguardhome/work
+/container config
+set memory-high=512.0MiB registry-url=https://registry-1.docker.io
+/disk
+set usb1 media-interface=*2000010
+/interface bridge port
+add bridge=bridge-lan interface=ether2
+add bridge=bridge-lan interface=ether3
+add bridge=bridge-lan interface=ether4
+add bridge=bridge-lan interface=ether5
+add bridge=bridge-lan interface=ether6
+add bridge=bridge-lan interface=ether7
+add bridge=bridge-lan interface=ether8
+add bridge=bridge-lan interface=sfp-sfpplus1
+add bridge=bridge-lan interface=veth-ag
+/interface detect-internet
+set detect-interface-list=all
+/interface list member
+add interface=bridge-lan list=LAN
+add interface=ether1 list=WAN
+add interface=veth-ag list=LAN
+/ip address
+add address=192.168.1.1/24 interface=bridge-lan network=192.168.1.0
+add address=192.168.99.1/24 interface=bridge-lan network=192.168.99.0
+/ip cloud
+set ddns-enabled=yes ddns-update-interval=59m59s
+/ip dhcp-client
+add interface=ether1 use-peer-dns=no
+/ip dhcp-server lease
+add address=192.168.1.254 client-id=1:24:8a:7:94:79:31 comment=DESKTOP-OFFICEMAIN mac-address=\
+    24:8A:07:94:79:31 server=server1
+add address=192.168.1.253 client-id=1:0:30:93:1d:b:c9 comment=DESKTOP-MINIPC mac-address=\
+    00:30:93:1D:0B:C9 server=server1
+add address=192.168.1.251 comment="Buffalo NAS" mac-address=C4:3C:EA:30:7C:D9 server=server1
+add address=192.168.1.250 client-id=1:24:8a:7:94:7c:44 comment=DESKTOP-OFFICE2 mac-address=\
+    24:8A:07:94:7C:44 server=server1
+add address=192.168.1.248 client-id=1:4:f4:1c:89:b:f0 comment=CRS309 mac-address=04:F4:1C:89:0B:F0 \
+    server=server1
+add address=192.168.1.247 client-id=ff:76:cf:b8:c7:0:2:0:0:ab:11:6c:ac:f9:de:2f:7b:65:30 mac-address=\
+    0C:EA:14:DB:7E:35 server=server1
+add address=192.168.1.246 client-id=1:84:78:48:ca:83:4f mac-address=84:78:48:CA:83:4F server=server1
+add address=192.168.1.244 client-id=1:ca:49:d:94:3:84 mac-address=CA:49:0D:94:03:84 server=server1
+add address=192.168.1.224 mac-address=FC:D7:49:BB:81:F0 server=server1
+add address=192.168.1.204 client-id=1:66:c1:b8:cf:d4:54 mac-address=66:C1:B8:CF:D4:54 server=server1
+add address=192.168.1.194 client-id=1:8c:30:66:98:4d:22 mac-address=8C:30:66:98:4D:22 server=server1
+add address=192.168.1.181 comment="MS01 docker01 container" mac-address=BC:24:11:9D:E5:3F
+add address=192.168.1.182 comment="MS01 Proxmox" mac-address=BC:24:11:9D:E5:3A
+/ip dhcp-server network
+add address=192.168.1.0/24 dns-server=192.168.99.2 gateway=192.168.1.1
+add address=192.168.99.0/24 dns-server=192.168.99.2 gateway=192.168.99.1
+/ip dns
+set allow-remote-requests=yes servers=192.168.99.2
+/ip firewall address-list
+add address=192.168.1.254 list=management
+add address=192.168.1.250 list=management
+add address=192.168.1.253 list=management
+add address=173.245.48.0/20 list=cloudflare
+add address=103.21.244.0/22 list=cloudflare
+add address=103.22.200.0/22 list=cloudflare
+add address=103.31.4.0/22 list=cloudflare
+add address=141.101.64.0/18 list=cloudflare
+add address=108.162.192.0/18 list=cloudflare
+add address=190.93.240.0/20 list=cloudflare
+add address=188.114.96.0/20 list=cloudflare
+add address=197.234.240.0/22 list=cloudflare
+add address=198.41.128.0/17 list=cloudflare
+add address=162.158.0.0/15 list=cloudflare
+add address=104.16.0.0/13 list=cloudflare
+add address=104.24.0.0/14 list=cloudflare
+add address=172.64.0.0/13 list=cloudflare
+add address=131.0.72.0/22 list=cloudflare
+/ip firewall filter
+add action=fasttrack-connection chain=forward comment="Fasttrack established" connection-state=\
+    established,related hw-offload=yes
+add action=accept chain=forward comment="Allow established/related" connection-state=\
+    established,related
+add action=drop chain=forward comment="Drop invalid" connection-state=invalid
+add action=accept chain=forward comment="Allow LAN out to internet" in-interface-list=LAN
+add action=accept chain=forward comment="Allow Cloudflare -> Traefik (origin 8443 -> 443)" \
+    connection-nat-state=dstnat dst-address=192.168.1.181 dst-port=443 in-interface=ether1 protocol=\
+    tcp src-address-list=cloudflare
+add action=drop chain=forward comment="Drop non-Cloudflare -> Traefik" connection-nat-state=dstnat \
+    dst-address=192.168.1.181 dst-port=443 in-interface=ether1 protocol=tcp
+add action=drop chain=forward comment="Drop everything else forward"
+add action=accept chain=input comment="Accept established/related" connection-state=\
+    established,related
+add action=accept chain=input comment="Accept ICMP" limit=5,5:packet protocol=icmp
+add action=accept chain=input comment="WinBox from LAN only" dst-port=8291 in-interface-list=LAN \
+    protocol=tcp
+add action=accept chain=input comment="SSH from management IPs only" dst-port=22 protocol=tcp \
+    src-address-list=management
+add action=accept chain=forward comment="Allow dstnat from LAN" connection-nat-state=dstnat \
+    in-interface-list=LAN
+add action=drop chain=input comment="Drop everything else to router"
+/ip firewall nat
+add action=accept chain=dstnat comment="Prevent AdGuard DNS loop" dst-address=192.168.99.2 dst-port=\
+    53 protocol=tcp
+add action=accept chain=dstnat comment="Prevent AdGuard DNS loop" dst-address=192.168.99.2 dst-port=\
+    53 protocol=udp
+add action=dst-nat chain=dstnat comment="Force LAN DNS to AdGuard" dst-address=!192.168.99.2 \
+    dst-port=53 in-interface-list=LAN protocol=udp to-addresses=192.168.99.2
+add action=dst-nat chain=dstnat comment="Force LAN DNS to AdGuard" dst-address=!192.168.99.2 \
+    dst-port=53 in-interface-list=LAN protocol=tcp to-addresses=192.168.99.2
+add action=dst-nat chain=dstnat comment="Traefik origin 8443 -> svc-docker-01:443" dst-port=8443 \
+    in-interface=ether1 protocol=tcp to-addresses=192.168.1.181 to-ports=443
+add action=dst-nat chain=dstnat comment="Hairpin dstnat 8443 -> svc-docker-01:443" dst-port=8443 \
+    in-interface=bridge-lan protocol=tcp to-addresses=192.168.1.181 to-ports=443
+add action=masquerade chain=srcnat comment="Traefik hairpin" dst-address=192.168.1.181 \
+    out-interface-list=LAN src-address=192.168.1.0/24
+add action=masquerade chain=srcnat comment="Hairpin srcnat for Traefik" dst-address=192.168.1.181 \
+    dst-port=443 out-interface=bridge-lan protocol=tcp src-address=192.168.1.0/24
+add action=masquerade chain=srcnat comment=Default out-interface=ether1
+/ip service
+set ftp disabled=yes
+set telnet disabled=yes
+set www disabled=yes
+set api disabled=yes
+set api-ssl disabled=yes
+/ipv6 dhcp-client
+add interface=ether1 pool-name=/59 request=prefix
+/system clock
+set time-zone-autodetect=no time-zone-name=America/Phoenix
+/system ntp server
+set broadcast-addresses=0.0.0.0 use-local-clock=yes
+/tool sniffer
+set streaming-server=0.0.0.0:7777

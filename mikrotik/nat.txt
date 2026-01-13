@@ -1,0 +1,23 @@
+# 2026-01-12 22:37:08 by RouterOS 7.20.6
+# software id = AIDT-HVMW
+#
+# model = RB5009UPr+S+
+# serial number = HK40AY7X8TT
+/ip firewall nat
+add action=accept chain=dstnat comment="Prevent AdGuard DNS loop" dst-address=192.168.99.2 dst-port=\
+    53 protocol=tcp
+add action=accept chain=dstnat comment="Prevent AdGuard DNS loop" dst-address=192.168.99.2 dst-port=\
+    53 protocol=udp
+add action=dst-nat chain=dstnat comment="Force LAN DNS to AdGuard" dst-address=!192.168.99.2 \
+    dst-port=53 in-interface-list=LAN protocol=udp to-addresses=192.168.99.2
+add action=dst-nat chain=dstnat comment="Force LAN DNS to AdGuard" dst-address=!192.168.99.2 \
+    dst-port=53 in-interface-list=LAN protocol=tcp to-addresses=192.168.99.2
+add action=dst-nat chain=dstnat comment="Traefik origin 8443 -> svc-docker-01:443" dst-port=8443 \
+    in-interface=ether1 protocol=tcp to-addresses=192.168.1.181 to-ports=443
+add action=dst-nat chain=dstnat comment="Hairpin dstnat 8443 -> svc-docker-01:443" dst-port=8443 \
+    in-interface=bridge-lan protocol=tcp to-addresses=192.168.1.181 to-ports=443
+add action=masquerade chain=srcnat comment="Traefik hairpin" dst-address=192.168.1.181 \
+    out-interface-list=LAN src-address=192.168.1.0/24
+add action=masquerade chain=srcnat comment="Hairpin srcnat for Traefik" dst-address=192.168.1.181 \
+    dst-port=443 out-interface=bridge-lan protocol=tcp src-address=192.168.1.0/24
+add action=masquerade chain=srcnat comment=Default out-interface=ether1

@@ -1,0 +1,29 @@
+/ip firewall filter export
+# 2026-01-12 22:35:14 by RouterOS 7.20.6
+# software id = AIDT-HVMW
+#
+# model = RB5009UPr+S+
+# serial number = HK40AY7X8TT
+/ip firewall filter
+add action=fasttrack-connection chain=forward comment="Fasttrack established" connection-state=\
+    established,related hw-offload=yes
+add action=accept chain=forward comment="Allow established/related" connection-state=\
+    established,related
+add action=drop chain=forward comment="Drop invalid" connection-state=invalid
+add action=accept chain=forward comment="Allow LAN out to internet" in-interface-list=LAN
+add action=accept chain=forward comment="Allow Cloudflare -> Traefik (origin 8443 -> 443)" \
+    connection-nat-state=dstnat dst-address=192.168.1.181 dst-port=443 in-interface=ether1 protocol=\
+    tcp src-address-list=cloudflare
+add action=drop chain=forward comment="Drop non-Cloudflare -> Traefik" connection-nat-state=dstnat \
+    dst-address=192.168.1.181 dst-port=443 in-interface=ether1 protocol=tcp
+add action=drop chain=forward comment="Drop everything else forward"
+add action=accept chain=input comment="Accept established/related" connection-state=\
+    established,related
+add action=accept chain=input comment="Accept ICMP" limit=5,5:packet protocol=icmp
+add action=accept chain=input comment="WinBox from LAN only" dst-port=8291 in-interface-list=LAN \
+    protocol=tcp
+add action=accept chain=input comment="SSH from management IPs only" dst-port=22 protocol=tcp \
+    src-address-list=management
+add action=accept chain=forward comment="Allow dstnat from LAN" connection-nat-state=dstnat \
+    in-interface-list=LAN
+add action=drop chain=input comment="Drop everything else to router"
