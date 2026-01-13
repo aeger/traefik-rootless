@@ -1,0 +1,69 @@
+# Podman Quadlet unit for Traefik (rootless)
+# Place at: ~/.config/containers/systemd/traefik.container
+#
+# Then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now traefik.service
+
+[Unit]
+Description=Traefik v3 (rootless Podman)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=docker.io/traefik:v3.1
+ContainerName=traefik
+Network=proxy
+
+# Ports (rootlessport will bind host 80/443/8080)
+PublishPort=80:80
+PublishPort=443:443
+PublishPort=8080:8080
+
+# DNS for ACME + Cloudflare API calls
+DNS=1.1.1.1
+DNS=8.8.8.8
+
+# Volumes
+Volume=%h/traefik/data:/data
+Volume=%h/traefik/secrets:/secrets:ro
+Volume=/run/user/%U/podman/podman.sock:/var/run/docker.sock:ro
+
+# Env file
+EnvironmentFile=%h/traefik/cf.env
+
+# Labels (dashboard protected)
+Label=traefik.enable=true
+Label=traefik.http.routers.traefik.rule=Host(`traefik.az-lab.dev`)
+Label=traefik.http.routers.traefik.entrypoints=websecure
+Label=traefik.http.routers.traefik.tls=true
+Label=traefik.http.routers.traefik.tls.certresolver=le
+Label=traefik.http.routers.traefik.service=api@internal
+Label=traefik.http.middlewares.traefik-auth.basicauth.usersfile=/secrets/traefik.htpasswd
+Label=traefik.http.middlewares.traefik-allow.ipallowlist.sourcerange=192.168.1.0/24,10.7.0.0/24,10.89.0.0/16
+Label=traefik.http.routers.traefik.middlewares=traefik-allow,traefik-auth
+
+# Command args (static config)
+Exec=--log.level=INFO
+Exec=--accesslog=true
+Exec=--api.dashboard=true
+Exec=--entrypoints.web.address=:80
+Exec=--entrypoints.websecure.address=:443
+Exec=--entrypoints.web.http.redirections.entrypoint.to=websecure
+Exec=--entrypoints.web.http.redirections.entrypoint.scheme=https
+Exec=--providers.docker=true
+Exec=--providers.docker.endpoint=unix:///var/run/docker.sock
+Exec=--providers.docker.exposedbydefault=false
+Exec=--certificatesresolvers.le.acme.email=YOUREMAIL@example.com
+Exec=--certificatesresolvers.le.acme.storage=/data/acme.json
+Exec=--certificatesresolvers.le.acme.dnschallenge=true
+Exec=--certificatesresolvers.le.acme.dnschallenge.provider=cloudflare
+Exec=--certificatesresolvers.le.acme.dnschallenge.delaybeforecheck=10
+Exec=--certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+
+[Service]
+Restart=always
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target
