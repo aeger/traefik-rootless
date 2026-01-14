@@ -9,6 +9,12 @@ set -euo pipefail
 #
 # Edit the variables below for your environment.
 
+#!/usr/bin/env bash
+# shellcheck disable=SC1009,SC1073
+#!/usr/bin/env bash
+# shellcheck disable=SC1009,SC1073
+
+
 TRAEFIK_HOSTNAME="traefik.az-lab.dev"
 CF_ENV_FILE="${HOME}/traefik/cf.env"
 DATA_DIR="${HOME}/traefik/data"
