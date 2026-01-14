@@ -1,75 +1,175 @@
-# Homelab ingress overview (Cloudflare + MikroTik + Traefik + rootless Podman)
+# Homelab Ingress Overview (Rootless Podman + Traefik v3 + Cloudflare + MikroTik)
 
-This doc ties together the moving parts so you don’t have to re-learn them at 2am.
+This document describes the ingress design for this homelab: how public traffic reaches internal services using **Traefik v3** running in **rootless Podman** on Ubuntu, secured with **Cloudflare DNS-01 ACME**, kept reachable via a **Cloudflare DDNS updater container**, and exposed from the edge using a **MikroTik RB5009** router.
+
+It also documents the operational model: **systemd user services** generated from Podman, enabled via **linger**, so everything is resilient across reboots without running containers as root.
+
+---
+
+## TL;DR Architecture
+
+- **Public Internet**
+  - Users browse `https://service.example.com`
+- **Cloudflare**
+  - Authoritative DNS for domain
+  - `A` record points to home WAN IP (updated by DDNS container)
+  - ACME DNS-01 challenges handled via API token
+- **Home WAN**
+  - MikroTik RB5009 forwards ports (80/443) to ingress host
+- **Ingress Host (Ubuntu, Podman rootless)**
+  - Traefik v3 terminates TLS, routes to internal services
+  - Certificates issued via Cloudflare DNS-01
+- **Internal services**
+  - Podman containers behind Traefik
+  - Optional LAN services routed via Traefik
+
+---
 
 ## Components
 
-- **Cloudflare DNS**: public records (`A`/`CNAME`) for your homelab domain
-- **Cloudflare proxy**: terminates client TLS, forwards to your origin
-- **Cloudflare Origin Rule**: rewrites origin port (e.g. 8443) so you can dodge ISP blocks
-- **MikroTik (RB5009)**: dst-nat + firewall policy enforcing “only Cloudflare may talk to origin”
-- **Traefik (rootless Podman)**: reverse proxy + ACME DNS-01 + service discovery via Podman socket
-- **Workloads**: containers with Traefik labels (Portainer, AMP, etc.)
-- **DDNS updater** (optional): keeps Cloudflare `A` records pointing at your changing public IP
+### Traefik v3
+- Reverse proxy and TLS termination
+- ACME DNS-01 with Cloudflare
+- Container discovery via Podman socket
+- EntryPoints: `web`, `websecure`
 
-Related repos:
-- Traefik rootless runbook: https://github.com/aeger/traefik-rootless
-- Cloudflare DDNS updater: https://github.com/aeger/Cloudflare-DDNS-Updater
+Repo: https://github.com/aeger/traefik-rootless
 
-## Traffic flow
+### Cloudflare DNS-01
+- Enables wildcard and non-HTTP certificate issuance
+- Requires scoped Cloudflare API token
 
-### Public ingress (recommended)
+### Cloudflare DDNS Updater
+- Keeps DNS `A` record synced with changing WAN IP
+- Runs as rootless Podman container
 
-```mermaid
-flowchart LR
-  U[Internet User] --> CF[Cloudflare Edge<br/>TLS 443]
-  CF -->|Origin Rule: port 8443| ISP[(Your Public IP:8443)]
-  ISP --> MT[MikroTik RB5009<br/>dst-nat 8443->443]
-  MT --> T[Traefik (rootless)<br/>:443 websecure]
-  T --> S[Container Services]
+Repo: https://github.com/aeger/Cloudflare-DDNS-Updater
+
+### MikroTik RB5009
+- WAN edge router
+- NAT port forwards for 80/443
+- Optional hairpin NAT for internal access
+
+### Rootless Podman + systemd user services
+- Containers run unprivileged
+- systemd user units generated via Podman
+- `loginctl enable-linger` ensures startup at boot
+
+---
+
+## Traffic Flow
+
+### External HTTPS Request
+1. Client resolves DNS via Cloudflare
+2. Traffic hits WAN IP
+3. MikroTik forwards to ingress host
+4. Traefik terminates TLS
+5. Request routed to backend service
+6. Response returns upstream
+
+### Certificate Issuance (DNS-01)
+1. Traefik requests cert
+2. TXT record created via Cloudflare API
+3. Let’s Encrypt validates DNS
+4. Cert stored locally
+5. TXT record removed
+
+### WAN IP Change
+1. ISP assigns new IP
+2. DDNS container detects change
+3. Cloudflare record updated
+4. New connections resolve correctly
+
+---
+
+## Host Requirements
+
+- Ubuntu with rootless Podman
+- systemd user services enabled
+- Linger enabled for user
+- Inbound 443 permitted
+
+### Privileged Ports
+Binding 80/443 in rootless mode requires one of:
+- `net.ipv4.ip_unprivileged_port_start`
+- authbind
+- router-level port translation
+
+---
+
+## Repository Responsibilities
+
+### traefik-rootless
+- Traefik container definition
+- Static and dynamic config
+- ACME storage
+- systemd unit generation
+- Label examples
+
+### Cloudflare-DDNS-Updater
+- Updater container
+- Environment variables and secrets
+- systemd unit generation
+
+---
+
+## Suggested Directory Layout
+
+```
+~/containers/
+  traefik/
+    traefik.yml
+    dynamic/
+    acme/
+      acme.json
+    logs/
+  ddns/
+    .env
 ```
 
-### Why 8443?
+---
 
-Because ISPs love playing gatekeeper with 80/443. Cloudflare can still reach you on whatever port you expose, and your clients will never know.
+## systemd User Service Pattern
 
-## Security model
+- Create container with Podman
+- Generate unit:
+  `podman generate systemd --new --files --name <container>`
+- Move to:
+  `~/.config/systemd/user/`
+- Enable:
+  `systemctl --user enable --now <service>`
+- Enable linger:
+  `sudo loginctl enable-linger <user>`
 
-1. **No direct WAN 80/443** to your LAN.
-2. **Only Cloudflare IPs** may reach your origin port (8443) via MikroTik forward rules.
-3. Traefik issues **real Let’s Encrypt certs** via **DNS-01** (no inbound HTTP challenge needed).
-4. Dashboard is protected by:
-   - IP allowlist (your LAN + VPN)
-   - Basic auth (usersfile)
-5. Everything runs rootless where possible.
+---
 
-## Operational notes
+## Security Notes
 
-### Cert issuance vs Cloudflare SSL mode
+- Use scoped Cloudflare API tokens
+- Protect or disable Traefik dashboard
+- Enforce HTTPS-only access
+- Apply security headers and rate limits
 
-- If Cloudflare is set to **Full (strict)** but Traefik is still serving its **default** self-signed cert for that hostname, Cloudflare returns **526**.
-- Fix is always the same:
-  - make sure Traefik has a router for that hostname
-  - ensure the router uses `tls.certresolver=le`
-  - confirm the request reaches Traefik (MikroTik counters + host tcpdump)
+---
 
-### DDNS and “proxied” records
+## Failure Scenarios
 
-If you use the DDNS updater, set your records (e.g. `@`, `*`, `traefik`, `amp`) to proxied. Your clients still hit Cloudflare, not your origin IP directly.
+- DDNS failure: stale WAN IP
+- ACME token failure: cert renewal breaks
+- Missing port forwards: no ingress
+- Socket issues: Traefik can’t see containers
 
-## Debug checklist (fast)
+---
 
-- Cloudflare:
-  - Is the record proxied?
-  - Does the origin rule match the hostname and set port 8443?
-  - SSL mode Full vs Full (strict)?
-- MikroTik:
-  - dst-nat counter increments?
-  - forward accept rule increments (Cloudflare list)?
-  - conntrack shows established?
-- Host:
-  - `ss -lntp | egrep ':(80|443|8080)'` shows rootlessport
-  - `tcpdump -ni <iface> 'tcp port 443'` shows inbound SYN from MikroTik
-- Traefik:
-  - `podman logs traefik | egrep -i 'acme|error|certificate'`
-  - `curl -vk --resolve host:443:LANIP https://host/ | egrep -i 'subject:|issuer:'`
+## References
+
+- Traefik Rootless: https://github.com/aeger/traefik-rootless
+- Cloudflare DDNS Updater: https://github.com/aeger/Cloudflare-DDNS-Updater
+
+---
+
+## Notes to Future You
+
+- Document privileged port handling clearly
+- Back up `acme.json` securely
+- Don’t expose dashboards publicly
