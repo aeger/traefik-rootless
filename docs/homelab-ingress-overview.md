@@ -1,175 +1,138 @@
-# Homelab Ingress Overview (Rootless Podman + Traefik v3 + Cloudflare + MikroTik)
+# Homelab Ingress Overview (rootless Podman + Traefik v3)
 
-This document describes the ingress design for this homelab: how public traffic reaches internal services using **Traefik v3** running in **rootless Podman** on Ubuntu, secured with **Cloudflare DNS-01 ACME**, kept reachable via a **Cloudflare DDNS updater container**, and exposed from the edge using a **MikroTik RB5009** router.
+**Host (VM):** `svc-podman-01` (formerly `svc-docker-01`)  
+**Platform:** Proxmox VM → Ubuntu (rootless Podman)  
+**Ingress:** Traefik v3 (rootless) + Cloudflare DNS-01 ACME  
+**DDNS:** Cloudflare DDNS Updater container (rootless)
 
-It also documents the operational model: **systemd user services** generated from Podman, enabled via **linger**, so everything is resilient across reboots without running containers as root.
-
----
-
-## TL;DR Architecture
-
-- **Public Internet**
-  - Users browse `https://service.example.com`
-- **Cloudflare**
-  - Authoritative DNS for domain
-  - `A` record points to home WAN IP (updated by DDNS container)
-  - ACME DNS-01 challenges handled via API token
-- **Home WAN**
-  - MikroTik RB5009 forwards ports (80/443) to ingress host
-- **Ingress Host (Ubuntu, Podman rootless)**
-  - Traefik v3 terminates TLS, routes to internal services
-  - Certificates issued via Cloudflare DNS-01
-- **Internal services**
-  - Podman containers behind Traefik
-  - Optional LAN services routed via Traefik
+This document ties together the moving pieces so Future-You doesn't have to rediscover them at 1:12 AM.
 
 ---
 
-## Components
+## Architecture (high level)
 
-### Traefik v3
-- Reverse proxy and TLS termination
-- ACME DNS-01 with Cloudflare
-- Container discovery via Podman socket
-- EntryPoints: `web`, `websecure`
-
-Repo: https://github.com/aeger/traefik-rootless
-
-### Cloudflare DNS-01
-- Enables wildcard and non-HTTP certificate issuance
-- Requires scoped Cloudflare API token
-
-### Cloudflare DDNS Updater
-- Keeps DNS `A` record synced with changing WAN IP
-- Runs as rootless Podman container
-
-Repo: https://github.com/aeger/Cloudflare-DDNS-Updater
-
-### MikroTik RB5009
-- WAN edge router
-- NAT port forwards for 80/443
-- Optional hairpin NAT for internal access
-
-### Rootless Podman + systemd user services
-- Containers run unprivileged
-- systemd user units generated via Podman
-- `loginctl enable-linger` ensures startup at boot
+- **Edge router:** MikroTik RB5009
+- **Public DNS:** Cloudflare
+- **TLS certificates:** Traefik + ACME via Cloudflare DNS-01 challenge
+- **Ingress proxy:** Traefik (rootless Podman) publishing **80/443**
+- **Service discovery:** container labels / static dynamic-config (depending on your setup)
+- **Dynamic public IP:** Cloudflare DDNS updater container keeps your Cloudflare A/AAAA record current
 
 ---
 
-## Traffic Flow
+## Important operational choice: systemd units vs Podman restart policy
 
-### External HTTPS Request
-1. Client resolves DNS via Cloudflare
-2. Traffic hits WAN IP
-3. MikroTik forwards to ingress host
-4. Traefik terminates TLS
-5. Request routed to backend service
-6. Response returns upstream
+There are two common ways to keep rootless containers running across reboots:
 
-### Certificate Issuance (DNS-01)
-1. Traefik requests cert
-2. TXT record created via Cloudflare API
-3. Let’s Encrypt validates DNS
-4. Cert stored locally
-5. TXT record removed
+### Option A (Podman-native): use restart policies (what you're currently doing)
+- Containers restart via Podman, not via systemd user units.
+- `systemctl --user status container-traefik` will **not** exist unless you generated units.
 
-### WAN IP Change
-1. ISP assigns new IP
-2. DDNS container detects change
-3. Cloudflare record updated
-4. New connections resolve correctly
-
----
-
-## Host Requirements
-
-- Ubuntu with rootless Podman
-- systemd user services enabled
-- Linger enabled for user
-- Inbound 443 permitted
-
-### Privileged Ports
-Binding 80/443 in rootless mode requires one of:
-- `net.ipv4.ip_unprivileged_port_start`
-- authbind
-- router-level port translation
-
----
-
-## Repository Responsibilities
-
-### traefik-rootless
-- Traefik container definition
-- Static and dynamic config
-- ACME storage
-- systemd unit generation
-- Label examples
-
-### Cloudflare-DDNS-Updater
-- Updater container
-- Environment variables and secrets
-- systemd unit generation
-
----
-
-## Suggested Directory Layout
-
+**Health checks:**
+```bash
+podman ps
+ss -lntp | egrep ':80|:443'
+podman logs --tail 200 traefik
 ```
-~/containers/
-  traefik/
-    traefik.yml
-    dynamic/
-    acme/
-      acme.json
-    logs/
-  ddns/
-    .env
+
+You may see `rootlessport` listening on 80/443, which is normal for rootless low-port publishing:
+```bash
+ss -lntp | egrep ':80|:443'
+# ... users:(("rootlessport",pid=...,fd=...))
+```
+
+### Option B (systemd-user): generate and enable user units
+This gives you `container-traefik.service` and consistent lifecycle control.
+
+**Generate unit:**
+```bash
+podman generate systemd --name traefik --files --new
+```
+
+**Install it:**
+```bash
+mkdir -p ~/.config/systemd/user
+mv container-traefik.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now container-traefik
+```
+
+**Then you can manage it like:**
+```bash
+systemctl --user status container-traefik
+journalctl --user -u container-traefik -n 200 --no-pager
+```
+
+> Pick one approach and stick with it. Running restart policies *and* systemd units for the same container is how you get confusing startup races.
+
+---
+
+## Rootless low ports (80/443)
+
+If you're binding privileged ports as a non-root user, you need one of the standard approaches:
+- `net.ipv4.ip_unprivileged_port_start=0` (system-wide sysctl), or
+- host-level port forwarding (80/443 → high ports), or
+- authbind/cap tricks depending on your distro
+
+**Quick verification:**
+```bash
+ss -lntp | egrep ':80|:443'
 ```
 
 ---
 
-## systemd User Service Pattern
+## Cloudflare DNS-01 (ACME)
 
-- Create container with Podman
-- Generate unit:
-  `podman generate systemd --new --files --name <container>`
-- Move to:
-  `~/.config/systemd/user/`
-- Enable:
-  `systemctl --user enable --now <service>`
-- Enable linger:
-  `sudo loginctl enable-linger <user>`
+Traefik obtains certificates via Cloudflare API using DNS-01, so it can validate without exposing a special HTTP path.
 
----
+Typical requirements:
+- Cloudflare API token with the correct DNS permissions for your zone
+- Traefik configured with the Cloudflare DNS challenge provider
+- Persistent storage for ACME state (e.g., `acme.json`) so certs survive restarts
 
-## Security Notes
-
-- Use scoped Cloudflare API tokens
-- Protect or disable Traefik dashboard
-- Enforce HTTPS-only access
-- Apply security headers and rate limits
+**Sanity checks:**
+```bash
+podman logs --tail 200 traefik | egrep -i 'acme|dns|challenge|cert|error'
+podman inspect traefik --format '{{json .Mounts}}'
+```
 
 ---
 
-## Failure Scenarios
+## Cloudflare DDNS updater
 
-- DDNS failure: stale WAN IP
-- ACME token failure: cert renewal breaks
-- Missing port forwards: no ingress
-- Socket issues: Traefik can’t see containers
+Runs as its own rootless container and updates the desired Cloudflare record when your WAN IP changes.
 
----
-
-## References
-
-- Traefik Rootless: https://github.com/aeger/traefik-rootless
-- Cloudflare DDNS Updater: https://github.com/aeger/Cloudflare-DDNS-Updater
+**Sanity checks:**
+```bash
+podman ps
+podman logs --tail 200 cf-ddns
+```
 
 ---
 
-## Notes to Future You
+## Rename note (svc-docker-01 → svc-podman-01)
 
-- Document privileged port handling clearly
-- Back up `acme.json` securely
-- Don’t expose dashboards publicly
+Renaming the VM and the guest hostname generally does **not** break Traefik, because:
+- Traefik routes based on Host rules / labels, not the node hostname.
+- Rootless Podman state lives under the user, not tied to hostname.
+
+Things that *can* break:
+- internal DNS entries pointing at the old hostname
+- SSH config entries / known_hosts labels
+- any docs/scripts/Ansible inventories referencing `svc-docker-01`
+
+---
+
+## Quick “everything is fine” check
+
+Run as the rootless Podman user:
+
+```bash
+echo "== hostname =="; hostnamectl --static
+echo "== linger =="; loginctl show-user "$USER" -p Linger
+echo "== containers =="; podman ps
+echo "== traefik logs =="; podman logs --tail 80 traefik
+echo "== ports =="; ss -lntp | egrep ':80|:443' || true
+```
+
+Last updated: 2026-01-13.
