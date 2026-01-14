@@ -1,31 +1,31 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: help lint run stop restart logs status
+.PHONY: help install status logs restart stop ps
 
 help:
 	@echo "Targets:"
-	@echo "  make lint     - run shellcheck locally (if installed)"
-	@echo "  make run      - start/recreate Traefik"
-	@echo "  make stop     - stop Traefik container"
-	@echo "  make restart  - stop then run"
-	@echo "  make logs     - tail Traefik logs"
-	@echo "  make status   - show podman container status"
+	@echo "  make install  - install user unit + enable linger"
+	@echo "  make status   - systemd status"
+	@echo "  make logs     - follow logs"
+	@echo "  make restart  - restart service"
+	@echo "  make stop     - stop service"
+	@echo "  make ps       - podman ps summary"
 
-lint:
-	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed"; exit 1; }
-	shellcheck -x traefik-run.sh
-
-run:
-	chmod +x traefik-run.sh
-	./traefik-run.sh
-
-stop:
-	podman rm -f traefik 2>/dev/null || true
-
-restart: stop run
-
-logs:
-	podman logs -f traefik
+install:
+	chmod +x scripts/install-user-service.sh
+	scripts/install-user-service.sh
 
 status:
+	systemctl --user --no-pager status traefik.service || true
+
+logs:
+	journalctl --user -u traefik -f
+
+restart:
+	systemctl --user restart traefik.service
+
+stop:
+	systemctl --user stop traefik.service
+
+ps:
 	podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
