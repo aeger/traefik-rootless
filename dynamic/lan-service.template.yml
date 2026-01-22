@@ -1,0 +1,19 @@
+# Copy this file into ~/traefik/dynamic/<name>.yml and edit.
+# Then: podman restart traefik
+
+http:
+  routers:
+    REPLACE_ME:
+      rule: "Host(`REPLACE_ME.home.arpa`)"
+      entryPoints:
+        - websecure
+      tls: {}
+      middlewares:
+        - lan-allow
+      service: REPLACE_ME-svc
+
+  services:
+    REPLACE_ME-svc:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.X"

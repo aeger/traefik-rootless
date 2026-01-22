@@ -1,0 +1,16 @@
+http:
+  routers:
+    crs309:
+      rule: "Host(`crs309.home.arpa`)"
+      entryPoints:
+        - websecure
+      tls: {}
+      middlewares:
+        - lan-allow
+      service: crs309-svc
+
+  services:
+    crs309-svc:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.248"

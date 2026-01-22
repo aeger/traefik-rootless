@@ -1,0 +1,9 @@
+tls:
+  certificates:
+    - certFile: /certs/home-arpa.crt
+      keyFile: /certs/home-arpa.key
+
+  # Optional: if you want to force TLS options for LAN stuff, add them here.
+  # options:
+  #   lan:
+  #     minVersion: VersionTLS12

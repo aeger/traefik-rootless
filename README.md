@@ -1,8 +1,12 @@
 # Traefik v3 (rootless Podman) for a Cloudflare-fronted homelab
 
-This repo is the **reproducible install + runbook** for running **Traefik v3.x** in **rootless Podman** on Ubuntu Server, with **Cloudflare DNS-01 ACME** and a **MikroTik** doing the edge NAT/firewall.
+This repo is a reproducible install + runbook for running **Traefik v3.x in rootless Podman on Ubuntu Server**, with **Cloudflare DNS-01 ACME** and (optionally) a MikroTik doing edge NAT/firewall.
 
-It’s designed for the reality of residential ISPs (ports blocked, flaky inbound) and for people who prefer their “ingress” to not be a surprise security incident.
+You can treat this repo like a “I lost the VM, rebuild from scratch” kit:
+- install base packages
+- drop in your Cloudflare token + htpasswd
+- start Traefik with `podman-compose`
+- add more routes/services by editing YAML files
 
 ---
 
@@ -10,37 +14,17 @@ It’s designed for the reality of residential ISPs (ports blocked, flaky inboun
 
 - Rootless Traefik listening on **80/443** on the host (via `rootlessport`)
 - Automatic Let’s Encrypt certs using **Cloudflare DNS challenge** (no inbound 80 needed for ACME)
-- A **secured dashboard** at `https://traefik.<yourdomain>`:
+- A secured dashboard at `https://traefik.<yourdomain>`:
   - IP allowlist
   - Basic auth via `usersfile` (no hashes in CLI args)
+- Optional internal-only LAN reverse proxy (example: `crs309.home.arpa`) using the **file provider**
 - A clean “Cloudflare-to-origin on 8443” pattern to survive ISP blocks:
-  - Cloudflare connects to your public IP on **8443**
-  - MikroTik dst-nat **8443 → 443** on the host
+  - Cloudflare connects to your public IP on 8443
+  - MikroTik dst-nat 8443 → 443 on the host
   - Traefik terminates TLS on 443 and routes to containers
 
----
-
-## Architecture (the important bit)
-
-**WAN flow (recommended):**
-
-```
-Internet client → Cloudflare (443)
-               → Cloudflare Origin Rule sets origin port 8443
-               → Your public IP:8443
-               → MikroTik dst-nat 8443 → 192.168.1.181:443
-               → Traefik (rootless) websecure → containers
-```
-
-**LAN flow (hairpin, optional):**
-
-```
-LAN client → MikroTik hairpin dst-nat 8443 → 192.168.1.181:443
-          → (src-nat masquerade) → Traefik → containers
-```
-
 If you want the bigger picture (Traefik + cf-ddns + MikroTik + Cloudflare), see:
-- [`docs/homelab-ingress-overview.md`](docs/homelab-ingress-overview.md)
+- `docs/homelab-ingress-overview.md`
 - Cloudflare DDNS companion: https://github.com/aeger/Cloudflare-DDNS-Updater
 
 ---
@@ -48,76 +32,109 @@ If you want the bigger picture (Traefik + cf-ddns + MikroTik + Cloudflare), see:
 ## Prereqs
 
 Target host:
-- Ubuntu Server **24.04+**
+- Ubuntu Server 24.04+
 - Rootless Podman
 - `uidmap`, `slirp4netns`, `fuse-overlayfs`
 - `apache2-utils` (for `htpasswd`)
+- `podman-compose` (we use Compose YAML to run Traefik)
 
 Install:
 
 ```bash
 sudo apt update
-sudo apt install -y podman uidmap slirp4netns fuse-overlayfs apache2-utils
+sudo apt install -y podman podman-compose uidmap slirp4netns fuse-overlayfs apache2-utils
 ```
 
-Enable lingering (so user services/containers survive logout/reboot):
+Enable lingering (so user services survive logout/reboot):
 
 ```bash
 loginctl enable-linger "$USER"
+```
+
+Enable the Podman API socket (Traefik uses it via `/var/run/docker.sock`):
+
+```bash
+systemctl --user enable --now podman.socket
 ```
 
 Sanity check:
 
 ```bash
 podman info | grep -i rootless
+ls -la /run/user/$(id -u)/podman/podman.sock
 ```
 
 ---
 
-## Files in this repo
+## Files in this repo (new structure)
 
-```
+```text
 traefik-rootless/
+  compose.yml                      # NEW: canonical launcher (podman-compose)
+  cf.env.example                   # Cloudflare token env file template
   README.md
-  traefik.run.sh
-  cf.env.example
-  secrets/
-    traefik.htpasswd.example
-  mikrotik/
-    ingress-8443-example.rsc
-  docs/
-    homelab-ingress-overview.md
-  systemd/
-    traefik.container          # Podman Quadlet (recommended autostart)
-  .github/workflows/
-    shellcheck.yml
   CHANGELOG.md
   LICENSE
+  .github/workflows/...
+  docs/
+    homelab-ingress-overview.md
+    compose-quickstart.md          # NEW
+    lan-services.md                # NEW: how to add *.home.arpa routes
+  mikrotik/
+    ingress-8443-example.rsc
+  scripts/
+    bootstrap.sh                   # NEW: “fresh VM” bootstrap helper
+  secrets/
+    traefik.htpasswd.example
+  dynamic/                         # NEW: file provider configs (routers/services/middlewares/tls)
+    lan-middlewares.yml
+    tls-home-arpa.yml
+    crs309.yml                     # example LAN destination
+    lan-service.template.yml       # copy/paste template for new destinations
+  systemd/
+    podman-compose@.service.example # NEW: optional autostart
+  traefik.run.sh                   # Legacy runner (still here, but deprecated)
 ```
 
 ---
 
-## 1) Create directories
+## 0) Clone the repo
 
 ```bash
-mkdir -p ~/traefik/{data,secrets}
+git clone https://github.com/aeger/traefik-rootless
+cd traefik-rootless
+```
+
+---
+
+## 1) Create runtime directories
+
+This repo is config. Runtime state lives in `~/traefik/`:
+
+```bash
+mkdir -p ~/traefik/{data,secrets,dynamic,certs}
 chmod 700 ~/traefik ~/traefik/secrets
+```
+
+Create the ACME store file (Traefik requires it to exist and be writable):
+
+```bash
+touch ~/traefik/data/acme.json
+chmod 600 ~/traefik/data/acme.json
 ```
 
 ---
 
 ## 2) Cloudflare API token (DNS-01)
 
-Cloudflare Dashboard → **API Tokens** → Create Token
+Cloudflare Dashboard → API Tokens → Create Token
 
 Permissions:
-- Zone → DNS → **Edit**
-- Zone → Zone → **Read**
+- Zone → DNS → Edit
+- Zone → Zone → Read
 
 Scope:
 - Zone: `yourdomain.tld`
-
-Save the token somewhere safe (not your clipboard history, ideally).
 
 Create your env file:
 
@@ -142,130 +159,97 @@ chmod 600 ~/traefik/secrets/traefik.htpasswd
 
 ## 4) Shared proxy network
 
+This network is where Traefik and your proxied containers meet.
+
 ```bash
-podman network create proxy
+podman network exists proxy || podman network create proxy
 ```
 
 ---
 
-## 5) Run Traefik (manual)
+## 5) TLS for `*.home.arpa` (optional, for LAN-only names)
 
-This is the “works now” path. It’s also what you’ll use for quick changes.
+If you want internal names like `crs309.home.arpa`, you need a cert that covers them.
 
-```bash
-bash ./traefik.run.sh
+The included example expects these files on the host:
+
+```text
+~/traefik/certs/home-arpa.crt
+~/traefik/certs/home-arpa.key
 ```
 
-> `traefik.run.sh` assumes:
-> - `~/traefik/cf.env` exists
-> - `~/traefik/data` exists and is writable
-> - `~/traefik/secrets/traefik.htpasswd` exists
+Generate with `mkcert` on a trusted workstation if you want, then copy them over.
+(Or use your own CA. The point is: browsers must trust it.)
 
 ---
 
-## 6) Verify (LAN)
+## 6) Start Traefik with Compose (recommended)
 
-Certificate check (forces SNI + routes like the internet would):
+The `compose.yml` is designed to be edited safely:
+- set your public dashboard hostname
+- set your ACME email
+- keep paths consistent
+
+Start:
 
 ```bash
-curl -vk --resolve traefik.yourdomain.tld:443:192.168.1.181 https://traefik.yourdomain.tld/ 2>&1 | egrep -i "subject:|issuer:"
-```
-
-Dashboard:
-
-```bash
-curl -vk --resolve traefik.yourdomain.tld:443:192.168.1.181 https://traefik.yourdomain.tld/
-```
-
----
-
-## 7) MikroTik rules (ingress via 8443)
-
-Import example script and adapt it:
-
-- `mikrotik/ingress-8443-example.rsc`
-
-The intent:
-- **dst-nat WAN tcp/8443 → 192.168.1.181:443**
-- optional hairpin for LAN
-- firewall allow: **Cloudflare IPs → dstnat → 443**
-- firewall drop: everyone else trying to hit that dstnat
-
-Cloudflare IP lists change over time. Don’t hardcode once and forget. (Humans love forgetting.)
-
----
-
-## 8) Cloudflare settings
-
-### DNS
-Create these as **proxied** (orange cloud):
-- `traefik.yourdomain.tld` → A record to your public IP (or use the DDNS updater repo)
-
-### Origin Rule (key)
-Cloudflare → Rules → Origin Rules
-
-“If hostname ends with `yourdomain.tld` → set origin port **8443**”
-
-### SSL/TLS mode
-- Temporary: **Full**
-- Final: **Full (strict)** (after Traefik has issued a valid cert)
-
-If you see Cloudflare **526**, it’s not “down”, it’s Cloudflare refusing your origin cert. That’s either:
-- Traefik still serving the default cert for that hostname, or
-- the router rule isn’t matching, or
-- the request isn’t reaching Traefik at all.
-
----
-
-## 9) Autostart properly (Quadlet)
-
-`--restart=unless-stopped` only works if lingering is enabled and your user session is brought up properly.
-
-For “headless and predictable”, use Podman Quadlet.
-
-Install the unit:
-
-```bash
-mkdir -p ~/.config/containers/systemd
-cp systemd/traefik.container ~/.config/containers/systemd/traefik.container
-systemctl --user daemon-reload
-systemctl --user enable --now traefik.service
+podman-compose up -d
+podman ps --filter name=traefik
 ```
 
 Logs:
 
 ```bash
-journalctl --user -u traefik -f
+podman logs traefik --tail=200
+```
+
+Dashboard:
+
+```text
+https://traefik.az-lab.dev/
 ```
 
 ---
 
-## Common mistakes (aka “things humans do”)
+## 7) Add LAN destinations (`*.home.arpa`)
 
-- **Wrong Host rule quoting**: Traefik’s router rule uses backticks:
-  - ✅ `Host(\`traefik.yourdomain.tld\`)`
-  - ❌ `Host('traefik.yourdomain.tld')` (this triggers “illegal rune literal”)
-- **acme.json permissions** must be `600` and writable by the container.
-- **Cloudflare DNS token** must have Zone Read + DNS Edit for the right zone.
-- **No route = default cert**: if your router rule doesn’t match, you’ll see `TRAEFIK DEFAULT CERT`.
-
----
-
-## Updating Traefik
+Copy the template and edit it:
 
 ```bash
-podman pull docker.io/traefik:v3.1
+cp dynamic/lan-service.template.yml ~/traefik/dynamic/mydevice.yml
+nano ~/traefik/dynamic/mydevice.yml
 podman restart traefik
 ```
 
-If you’re using Quadlet, restarting the service is fine:
-
-```bash
-systemctl --user restart traefik
-```
+Full guide: `docs/lan-services.md`
 
 ---
 
-## License
+## Notes and gotchas (because reality is rude)
 
-MIT. Because life is short and lawyers are exhausting.
+### “curl -I” returns 400 but browser works
+Some embedded device web UIs behave badly with `HEAD /` requests.
+`curl -I` uses HEAD. Browsers use GET.
+
+Use:
+
+```bash
+curl -k https://crs309.home.arpa/ -o /dev/null -v
+```
+
+instead of `-I` if you’re sanity-checking.
+
+### Rootless source IP and allowlists
+Rootless networking can make Traefik see client IPs like `10.89.0.x`.
+That’s why the allowlist includes both LAN ranges *and* your rootless subnet.
+
+If you change your Podman network/subnet, update `dynamic/lan-middlewares.yml`.
+
+---
+
+## Legacy runner
+
+`traefik.run.sh` is still present for reference, but Compose is now the canonical way.
+
+If you want a systemd user service to auto-start the Compose stack, see:
+- `systemd/podman-compose@.service.example`

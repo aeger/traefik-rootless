@@ -1,0 +1,30 @@
+http:
+  routers:
+    # Example: CRS309 Web UI over HTTP
+    crs309:
+      rule: "Host(`crs309.home.arpa`)"
+      entryPoints:
+        - websecure
+      tls: {}
+      middlewares:
+        - lan-allow
+        # - lan-auth   # optional
+      service: crs309-svc
+
+  services:
+    crs309-svc:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.248"
+
+  middlewares:
+    lan-allow:
+      ipAllowList:
+        sourceRange:
+          - "192.168.1.0/24"
+          - "10.7.0.0/24"
+          - "10.89.0.0/16"
+
+    lan-auth:
+      basicAuth:
+        usersFile: "/secrets/traefik.htpasswd"
