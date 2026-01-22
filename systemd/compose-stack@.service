@@ -1,0 +1,21 @@
+# Template unit to manage any podman-compose stack from a directory under $HOME.
+# Example:
+#   cp compose-stack@.service ~/.config/systemd/user/
+#   systemctl --user enable --now compose-stack@traefik.service
+# where ~/traefik contains compose.yml (or docker-compose.yml)
+
+[Unit]
+Description=Podman Compose stack: %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/%i
+ExecStart=/usr/bin/podman-compose up -d
+ExecStop=/usr/bin/podman-compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target

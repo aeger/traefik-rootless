@@ -221,7 +221,8 @@ nano ~/traefik/dynamic/mydevice.yml
 podman restart traefik
 ```
 
-Full guide: `docs/lan-services.md`
+Full guide: `docs/lan-services.md
+- `docs/home-arpa.md` - TLS for `*.home.arpa` + how to add new LAN destinations`
 
 ---
 
@@ -246,6 +247,70 @@ That’s why the allowlist includes both LAN ranges *and* your rootless subnet.
 If you change your Podman network/subnet, update `dynamic/lan-middlewares.yml`.
 
 ---
+
+
+
+## Systemd user service (rootless autostart)
+
+Rootless containers don't magically start themselves at boot just because you set `--restart unless-stopped`.
+That restart policy only works **after** the user-level Podman + systemd context is running.
+
+So for "it comes back after a reboot" you need:
+
+1) **linger** enabled for your user (so your user systemd starts at boot), and  
+2) a **user service** that runs `podman-compose up -d`.
+
+### Enable linger + podman socket
+
+```bash
+sudo loginctl enable-linger $USER
+
+# optional but recommended (makes the docker provider happy in rootless mode)
+systemctl --user enable --now podman.socket
+```
+
+Check:
+
+```bash
+loginctl show-user $USER -p Linger
+systemctl --user status podman.socket --no-pager
+```
+
+### Install the compose unit
+
+This repo includes two options:
+
+- `systemd/compose-traefik.service` (dedicated unit for `~/traefik`)
+- `systemd/compose-stack@.service` (template unit for **any** stack under `~/<name>`)
+
+#### Option A: dedicated `compose-traefik.service`
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/compose-traefik.service ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable --now compose-traefik.service
+```
+
+#### Option B: template `compose-stack@.service` (recommended)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/compose-stack@.service ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable --now compose-stack@traefik.service
+```
+
+Logs:
+
+```bash
+journalctl --user -u compose-traefik.service -n 200 --no-pager
+# or
+journalctl --user -u compose-stack@traefik.service -n 200 --no-pager
+```
+
 
 ## Legacy runner
 

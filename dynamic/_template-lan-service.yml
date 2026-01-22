@@ -1,0 +1,16 @@
+http:
+  routers:
+    example:
+      rule: "Host(`example.home.arpa`)"
+      entryPoints: [websecure]
+      tls: {}
+      middlewares: [lan-allow]
+      service: example-svc
+
+  services:
+    example-svc:
+      loadBalancer:
+        # For many embedded UIs, HEAD returns 400. That's normal; test with GET.
+        passHostHeader: false
+        servers:
+          - url: "http://192.168.1.123"

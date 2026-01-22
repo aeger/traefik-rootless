@@ -1,0 +1,15 @@
+[Unit]
+Description=Podman Compose stack: traefik
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/traefik
+ExecStart=/usr/bin/podman-compose up -d
+ExecStop=/usr/bin/podman-compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target

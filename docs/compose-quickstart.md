@@ -41,3 +41,24 @@ curl -Ik https://127.0.0.1/ -H "Host: traefik.az-lab.dev"
 ```
 
 If `curl -I` against a LAN device route returns 400, try GET instead. Some embedded UIs hate HEAD.
+
+
+## Autostart on reboot (rootless)
+
+Rootless stacks only auto-start on boot if your *user systemd* is running. That requires **linger**.
+
+```bash
+sudo loginctl enable-linger $USER
+systemctl --user enable --now podman.socket
+
+# Option A: dedicated unit
+mkdir -p ~/.config/systemd/user
+cp systemd/compose-traefik.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now compose-traefik.service
+
+# Option B: template unit (recommended if you have multiple stacks)
+cp systemd/compose-stack@.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now compose-stack@traefik.service
+```
